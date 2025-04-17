@@ -1,6 +1,9 @@
 import asyncio
+from pathlib import Path
 
 import pytest
+from alembic import command
+from alembic.config import Config
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
@@ -23,13 +26,29 @@ def event_loop():
 
 
 @pytest.fixture(scope='session')
-def db_engine():
-    return create_async_engine(settings.TEST_DATABASE_URL, echo=False)
+async def db_engine():
+    engine = create_async_engine(settings.TEST_DATABASE_URL, echo=False)
+    yield engine
+    await engine.dispose()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def apply_migrations(db_engine):
+    alembic_ini_path = Path(__file__).parent.parent / 'alembic.ini'
+    alembic_cfg = Config(alembic_ini_path)
+    alembic_cfg.set_main_option("sqlalchemy.url", settings.TEST_DATABASE_URL)
+
+    command.upgrade(alembic_cfg, "head")
+
+    yield
+
+    command.downgrade(alembic_cfg, "base")
 
 
 @pytest.fixture(scope='session')
 def async_session_maker(db_engine):
     return async_sessionmaker(bind=db_engine, expire_on_commit=False)
+
 
 @pytest.fixture(autouse=True, scope="function")
 async def clear_db(db_engine):
